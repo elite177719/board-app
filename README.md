@@ -21,7 +21,7 @@ Docker, Colima, QEMU는 전혀 사용하지 않습니다. 화면(Vue)은 이미 
 
 - MariaDB 10.11 (MacPorts) 실행 중, `127.0.0.1:3306`에서 접속 가능
 - 데이터베이스 `boarddb` 생성됨
-- 계정 `admin` / 비밀번호 `whxodhks`로 `boarddb`에 모든 권한 부여됨
+- 계정 `admin` / 비밀번호 `test`로 `boarddb`에 모든 권한 부여됨
 
 아래로 확인해 보세요.
 
@@ -46,7 +46,7 @@ cp .env.example .env
 open -e .env
 ```
 
-기본값은 이미 지금 환경(`admin` / `whxodhks` / `boarddb`)에 맞춰져 있습니다. 다만
+기본값은 이미 지금 환경(`admin` / `test` / `boarddb`)에 맞춰져 있습니다. 다만
 `SESSION_SECRET`은 반드시 아무 의미 없는 32자 이상의 임의 문자열로 바꾸세요.
 
 ```env
@@ -56,12 +56,12 @@ DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=boarddb
 DB_USER=admin
-DB_PASSWORD=whxodhks
+DB_PASSWORD=test
 
 SESSION_SECRET=여기에-32자-이상의-임의의-문자열을-입력하세요
 
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=whxodhks
+ADMIN_PASSWORD=test
 ```
 
 이 `.env`는 프로젝트 최상위 폴더(`board-app/.env`)에 있어야 합니다. `backend`
@@ -103,7 +103,7 @@ http://localhost:8080
 
 ```text
 아이디: admin
-비밀번호: whxodhks
+비밀번호: test
 ```
 
 일반 회원은 화면의 "회원가입"으로 새로 만들 수 있습니다.
