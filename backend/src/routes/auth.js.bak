@@ -1,0 +1,106 @@
+const express = require('express');
+const argon2 = require('argon2');
+const db = require('../db');
+const { isLocked, recordFailure, recordSuccess } = require('../middleware/lockout');
+
+const router = express.Router();
+
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,30}$/;
+
+function regenerateSession(req) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+router.post('/register', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ message: '아이디와 비밀번호를 입력하세요.' });
+    }
+    if (!USERNAME_RE.test(username)) {
+      return res.status(400).json({ message: '아이디는 영문/숫자/밑줄 3~30자여야 합니다.' });
+    }
+    if (String(password).length < 4 || String(password).length > 100) {
+      return res.status(400).json({ message: '비밀번호는 4~100자여야 합니다.' });
+    }
+
+    const [existing] = await db.query('SELECT id FROM users WHERE username = ?', [username]);
+    if (existing.length > 0) {
+      return res.status(409).json({ message: '이미 사용 중인 아이디입니다.' });
+    }
+
+    const hash = await argon2.hash(password, { type: argon2.argon2id });
+    const [result] = await db.query(
+      'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
+      [username, hash, 'USER']
+    );
+
+    await regenerateSession(req);
+    req.session.user = { id: result.insertId, username, role: 'USER' };
+    res.status(201).json({ user: req.session.user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: '회원가입 중 오류가 발생했습니다.' });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ message: '아이디와 비밀번호를 입력하세요.' });
+    }
+
+    const key = String(username).trim().toLowerCase();
+    const lockStatus = isLocked(key);
+    if (lockStatus.locked) {
+      res.set('Retry-After', String(lockStatus.retryAfter));
+      return res.status(429).json({
+        message: `너무 많이 실패하여 잠겼습니다. ${lockStatus.retryAfter}초 후 다시 시도하세요.`,
+      });
+    }
+
+    const [rows] = await db.query(
+      'SELECT id, username, password_hash, role FROM users WHERE username = ?',
+      [username]
+    );
+    const user = rows[0];
+    const genericError = { message: '아이디 또는 비밀번호가 올바르지 않습니다.' };
+    if (!user) {
+      recordFailure(key);
+      return res.status(401).json(genericError);
+    }
+
+    const ok = await argon2.verify(user.password_hash, password);
+    if (!ok) {
+      recordFailure(key);
+      return res.status(401).json(genericError);
+    }
+
+    recordSuccess(key);
+    await regenerateSession(req);
+    req.session.user = { id: user.id, username: user.username, role: user.role };
+    res.json({ user: req.session.user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: '로그인 중 오류가 발생했습니다.' });
+  }
+});
+
+router.post('/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('board.sid');
+    res.json({ message: '로그아웃되었습니다.' });
+  });
+});
+
+router.get('/me', (req, res) => {
+  res.json({ user: req.session.user || null });
+});
+
+module.exports = router;

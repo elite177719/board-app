@@ -1,0 +1,2 @@
+/Users/elite/Downloads/board-app/logs/20260831-0128-01-access.log.gz
+/Users/elite/Downloads/board-app/logs/20260901-1109-01-access.log.gz

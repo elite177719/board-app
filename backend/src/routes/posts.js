@@ -1,0 +1,198 @@
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const db = require('../db');
+const { requireAuth } = require('../middleware/auth');
+const logger = require('../logger');
+const ACTIONS = require('../constants/actions');
+const RESULTS = require('../constants/results');
+
+const router = express.Router();
+
+const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const ALLOWED_MIME = /^(image\/(png|jpeg|gif|webp)|application\/pdf|text\/plain)$/;
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: UPLOAD_DIR,
+    filename: (req, file, cb) => {
+      const safeExt = path.extname(file.originalname).slice(0, 10);
+      cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 3 },
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_MIME.test(file.mimetype)) return cb(null, true);
+    cb(new Error('허용되지 않는 파일 형식입니다. (이미지, PDF, TXT만 가능)'));
+  },
+});
+
+function isAdmin(req) {
+  return req.session.user && req.session.user.role === 'ADMIN';
+}
+
+router.get('/',requireAuth, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const offset = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+
+    let where = '';
+    const params = [];
+    if (search) {
+      where = 'WHERE p.title LIKE ?';
+      params.push(`%${search}%`);
+    }
+
+    const [rows] = await db.query(
+      `SELECT p.id, p.title, p.is_notice, p.created_at, u.username AS author_name,
+              (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
+      FROM posts p
+      JOIN users u ON u.id = p.author_id
+      ${where}
+      ORDER BY p.is_notice DESC, p.id DESC
+      LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    const [[{ total }]] = await db.query(
+      `SELECT COUNT(*) AS total FROM posts p ${where}`,
+      params
+    );
+
+    res.json({ items: rows, page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) });
+  } catch (err) {
+    logger.error(err.message);
+    res.status(500).json({ message: '목록을 불러오지 못했습니다.' });
+  }
+});
+
+router.get('/:id', requireAuth, async (req, res) => {
+  try {
+    const [[post]] = await db.query(
+      `SELECT p.*, u.username AS author_name
+      FROM posts p JOIN users u ON u.id = p.author_id
+      WHERE p.id = ?`,
+      [req.params.id]
+    );
+    if (!post) return res.status(404).json({ message: '게시글이 없습니다.' });
+
+    const [comments] = await db.query(
+      `SELECT c.id, c.content, c.created_at, c.author_id, u.username AS author_name
+      FROM comments c JOIN users u ON u.id = c.author_id
+      WHERE c.post_id = ? ORDER BY c.id ASC`,
+      [post.id]
+    );
+
+    const [attachments] = await db.query(
+      `SELECT id, original_name, mime_type, size FROM attachments WHERE post_id = ?`,
+      [post.id]
+    );
+
+    res.json({ post, comments, attachments });
+  } catch (err) {
+    logger.error(err.message);
+    res.status(500).json({ message: '게시글을 불러오지 못했습니다.' });
+  }
+});
+
+router.post('/', requireAuth, upload.array('files', 3), async (req, res) => {
+  try {
+    const { title, content } = req.body || {};
+    if (!title || !title.trim() || !content || !content.trim()) {
+      return res.status(400).json({ message: '제목과 내용을 입력하세요.' });
+    }
+    if (title.length > 200) {
+      return res.status(400).json({ message: '제목은 200자 이하여야 합니다.' });
+    }
+
+    const wantsNotice = req.body.isNotice === 'true' || req.body.isNotice === true;
+    const isNotice = isAdmin(req) && wantsNotice ? 1 : 0;
+
+    const [result] = await db.query(
+      'INSERT INTO posts (title, content, author_id, is_notice) VALUES (?, ?, ?, ?)',
+      [title.trim(), content, req.session.user.id, isNotice]
+    );
+
+    const files = req.files || [];
+    for (const f of files) {
+      await db.query(
+        'INSERT INTO attachments (post_id, original_name, stored_name, mime_type, size) VALUES (?, ?, ?, ?, ?)',
+        [result.insertId, f.originalname, f.filename, f.mimetype, f.size]
+      );
+    }
+
+    logger.info(`USER_ACTION action=${ACTIONS.CREATE_POST} actor_id=${req.session.user.id} actor_name=${req.session.user.username} postId=${result.insertId} result=${RESULTS.SUCCESS} ip=${req.ip}`);
+    res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    logger.error(err.message);
+    res.status(400).json({ message: err.message || '게시글 작성 중 오류가 발생했습니다.' });
+  }
+});
+
+router.patch('/:id', requireAuth, async (req, res) => {
+  try {
+    const [[post]] = await db.query('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ message: '게시글이 없습니다.' });
+    if (post.author_id !== req.session.user.id && !isAdmin(req)) {
+      logger.warn(`USER_ACTION action=${ACTIONS.UPDATE_POST} actor_id=${req.session.user.id} actor_name=${req.session.user.username} postId=${post.id} result=${RESULTS.DENIED} ip=${req.ip}`);
+      return res.status(403).json({ message: '수정 권한이 없습니다.' });
+    }
+
+    const { title, content } = req.body || {};
+    const wantsNotice = req.body.isNotice === true || req.body.isNotice === 'true';
+    const isNotice = isAdmin(req) ? (wantsNotice ? 1 : 0) : post.is_notice;
+
+    await db.query(
+      'UPDATE posts SET title = ?, content = ?, is_notice = ? WHERE id = ?',
+      [title ?? post.title, content ?? post.content, isNotice, post.id]
+    );
+
+    logger.info(`USER_ACTION action=${ACTIONS.UPDATE_POST} actor_id=${req.session.user.id} actor_name=${req.session.user.username} postId=${post.id} result=${RESULTS.SUCCESS} ip=${req.ip}`);
+    res.json({ message: '수정했습니다.' });
+  } catch (err) {
+    logger.error(err.message);
+    res.status(500).json({ message: '수정 중 오류가 발생했습니다.' });
+  }
+});
+
+router.delete('/:id', requireAuth, async (req, res) => {
+  try {
+    const [[post]] = await db.query('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ message: '게시글이 없습니다.' });
+    if (post.author_id !== req.session.user.id && !isAdmin(req)) {
+      logger.warn(`USER_ACTION action=${ACTIONS.DELETE_POST} actor_id=${req.session.user.id} actor_name=${req.session.user.username} postId=${post.id} result=${RESULTS.DENIED} ip=${req.ip}`);
+      return res.status(403).json({ message: '삭제 권한이 없습니다.' });
+    }
+
+    const [files] = await db.query('SELECT stored_name FROM attachments WHERE post_id = ?', [post.id]);
+    await db.query('DELETE FROM posts WHERE id = ?', [post.id]);
+
+    for (const f of files) {
+      fs.unlink(path.join(UPLOAD_DIR, f.stored_name), () => {});
+    }
+
+    logger.info(`USER_ACTION action=${ACTIONS.DELETE_POST} actor_id=${req.session.user.id} actor_name=${req.session.user.username} postId=${post.id} result=${RESULTS.SUCCESS} ip=${req.ip}`);
+    res.json({ message: '삭제했습니다.' });
+  } catch (err) {
+    logger.error(err.message);
+    res.status(500).json({ message: '삭제 중 오류가 발생했습니다.' });
+  }
+});
+
+router.get('/files/:fileId',requireAuth, async (req, res) => {
+  try {
+    const [[file]] = await db.query('SELECT * FROM attachments WHERE id = ?', [req.params.fileId]);
+    if (!file) return res.sendStatus(404);
+    res.download(path.join(UPLOAD_DIR, file.stored_name), file.original_name);
+  } catch (err) {
+    logger.error(err.message);
+    res.sendStatus(500);
+  }
+});
+
+module.exports = router;
