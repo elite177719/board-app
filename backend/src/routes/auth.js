@@ -15,15 +15,15 @@ function normalizeUsername(username) {
   return String(username || '').trim().toLowerCase();
 }
 
-function getSocketIp(req) {
-  const raw = req.socket?.remoteAddress || req.connection?.remoteAddress || req.ip || 'unknown';
-  return String(raw);
+function getClientIp(req) {
+  const raw = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
+  return String(raw).replace(/^::ffff:/, '');
 }
 
 const loginLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 20,
-  keyFn: (req) => `${getSocketIp(req)}:${normalizeUsername(req.body?.username) || '-'}`,
+  keyFn: (req) => `${getClientIp(req)}:${normalizeUsername(req.body?.username) || '-'}`,
   message: '로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.',
 });
 
@@ -78,7 +78,8 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     const key = normalizeUsername(username);
-    const lockStatus = isLocked(key);
+    const lockKey = `${getClientIp(req)}:${key}`;
+    const lockStatus = isLocked(lockKey);
     if (lockStatus.locked) {
       logger.warn(`USER_ACTION action=${ACTIONS.LOGIN} attempted_username=${username} result=${RESULTS.LOCKED} ip=${req.ip}`);
       res.set('Retry-After', String(lockStatus.retryAfter));
@@ -94,19 +95,19 @@ router.post('/login', loginLimiter, async (req, res) => {
     const user = rows[0];
     const genericError = { message: '아이디 또는 비밀번호가 올바르지 않습니다.' };
     if (!user) {
-      recordFailure(key);
+      recordFailure(lockKey);
       logger.warn(`USER_ACTION action=${ACTIONS.LOGIN} attempted_username=${username} result=${RESULTS.FAIL} reason=NO_USER ip=${req.ip}`);
       return res.status(401).json(genericError);
     }
 
     const ok = await argon2.verify(user.password_hash, password);
     if (!ok) {
-      recordFailure(key);
+      recordFailure(lockKey);
       logger.warn(`USER_ACTION action=${ACTIONS.LOGIN} attempted_username=${username} result=${RESULTS.FAIL} reason=WRONG_PASSWORD ip=${req.ip}`);
       return res.status(401).json(genericError);
     }
 
-    recordSuccess(key);
+    recordSuccess(lockKey);
     await regenerateSession(req);
     req.session.user = { id: user.id, username: user.username, role: user.role };
     logger.info(`USER_ACTION action=${ACTIONS.LOGIN} actor_id=${user.id} actor_name=${username} result=${RESULTS.SUCCESS} ip=${req.ip}`);

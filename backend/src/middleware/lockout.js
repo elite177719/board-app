@@ -7,14 +7,20 @@ function normalizeUsername(username) {
   return String(username || '').trim().toLowerCase();
 }
 
-function getState(username) {
-  const key = normalizeUsername(username);
+function buildKey(username, ip = null) {
+  const userKey = normalizeUsername(username);
+  if (!ip) return userKey;
+  return `${String(ip).trim().toLowerCase()}:${userKey}`;
+}
+
+function getState(username, ip = null) {
+  const key = buildKey(username, ip);
   return attempts.get(key) || { fails: 0, lockedUntil: 0, lockLevel: 0 };
 }
 
-function getLockStatus(username) {
-  const key = normalizeUsername(username);
-  const state = getState(key);
+function getLockStatus(username, ip = null) {
+  const key = buildKey(username, ip);
+  const state = getState(username, ip);
   const now = Date.now();
 
   if (state.lockedUntil > now) {
@@ -38,9 +44,9 @@ function getLockStatus(username) {
   };
 }
 
-function isLocked(username) {
-  const key = normalizeUsername(username);
-  const state = getState(key);
+function isLocked(username, ip = null) {
+  const key = buildKey(username, ip);
+  const state = getState(username, ip);
   const now = Date.now();
 
   if (state.lockedUntil > now) {
@@ -58,9 +64,9 @@ function isLocked(username) {
   return { locked: false };
 }
 
-function recordFailure(username) {
-  const key = normalizeUsername(username);
-  const state = getState(key);
+function recordFailure(username, ip = null) {
+  const key = buildKey(username, ip);
+  const state = getState(username, ip);
 
   state.fails += 1;
   if (state.fails >= FAIL_THRESHOLD) {
@@ -73,18 +79,27 @@ function recordFailure(username) {
   attempts.set(key, state);
 }
 
-function recordSuccess(username) {
-  const key = normalizeUsername(username);
+function recordSuccess(username, ip = null) {
+  const key = buildKey(username, ip);
   attempts.delete(key);
+  if (ip) {
+    attempts.delete(normalizeUsername(username));
+  }
 }
 
 function unlock(username, options = {}) {
-  const { resetLevel = true } = options;
-  const key = normalizeUsername(username);
-  const state = getState(key);
+  const { resetLevel = true, ip = null } = options;
+  const key = buildKey(username, ip);
+  const state = getState(username, ip);
 
   if (resetLevel) {
     attempts.delete(key);
+    attempts.delete(normalizeUsername(username));
+    for (const existingKey of [...attempts.keys()]) {
+      if (existingKey.endsWith(`:${normalizeUsername(username)}`)) {
+        attempts.delete(existingKey);
+      }
+    }
     return;
   }
 

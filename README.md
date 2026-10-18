@@ -51,6 +51,9 @@ open -e .env
 
 ```env
 PORT=8080
+HOST=127.0.0.1
+TRUST_PROXY=1
+SESSION_COOKIE_SECURE=true
 
 DB_HOST=127.0.0.1
 DB_PORT=3306
@@ -63,6 +66,10 @@ SESSION_SECRET=여기에-32자-이상의-임의의-문자열을-입력하세요
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=test
 ```
+
+`TRUST_PROXY`는 프록시(Nginx/ALB 등) 뒤에서만 설정하세요. 로컬/직접 노출 환경에서는
+비워두어야 `X-Forwarded-For` 헤더 스푸핑으로 IP 기반 제한이 우회되는 위험을 줄일 수 있습니다.
+`SESSION_COOKIE_SECURE=true`는 HTTPS 뒤에서 세션 쿠키를 보호할 때 사용합니다.
 
 이 `.env`는 프로젝트 최상위 폴더(`board-app/.env`)에 있어야 합니다. `backend`
 서버가 자동으로 이 파일을 읽으므로, 예전처럼 `source ../.env`를 직접 실행할

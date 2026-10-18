@@ -24,10 +24,12 @@ const commentRoutes = require('./routes/comments');
 const adminRoutes = require('./routes/admin');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT || 8080);
+const HOST = String(process.env.HOST || '127.0.0.1').trim();
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const SESSION_SECRET = String(process.env.SESSION_SECRET || '').trim();
 const TRUST_PROXY = String(process.env.TRUST_PROXY || '').trim();
+const SESSION_COOKIE_SECURE = String(process.env.SESSION_COOKIE_SECURE || 'true').trim().toLowerCase() === 'true';
 
 if (!SESSION_SECRET) {
   throw new Error('SESSION_SECRET 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.');
@@ -85,7 +87,7 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false, // 로컬 http 환경. HTTPS 운영 시 true로 변경
+      secure: SESSION_COOKIE_SECURE,
       maxAge: 1000 * 60 * 60 * 8, // 8시간
     },
   })
@@ -111,8 +113,8 @@ app.get(/.*/, (req, res) => {
 async function start() {
   try {
     await initDb();
-    app.listen(PORT, () => {
-      console.log(`Running ${PORT}`);
+    app.listen(PORT, HOST, () => {
+      console.log(`Running ${HOST}:${PORT}`);
     });
   } catch (err) {
     console.error('서버 시작 중 오류:', err);
