@@ -179,3 +179,60 @@ board-app/
 이 구성은 로컬 학습·사내 개발용입니다. 외부에 공개하는 서비스로 쓰려면
 HTTPS 적용, 리버스 프록시, CSRF 방어, 요청 속도 제한, 업로드 파일 검사,
 DB 백업, 감사 로그 등을 추가로 고려해야 합니다.
+
+## Nginx + HTTPS(자가서명) 구성 예시
+
+아래는 테스트/사내용 자가서명 인증서 구성입니다. 브라우저 경고가 뜰 수 있으며
+실서비스는 Let's Encrypt 같은 공인 인증서를 사용하세요.
+
+### 1) 애플리케이션 설정
+
+프로젝트 루트 `.env`에서 프록시 환경임을 명시합니다.
+
+```env
+TRUST_PROXY=1
+```
+
+백엔드를 재시작하세요.
+
+```bash
+cd backend
+npm start
+```
+
+### 2) 인증서 생성
+
+저장소에 포함된 스크립트를 사용합니다.
+
+```bash
+chmod +x deploy/nginx/generate-selfsigned-cert.sh
+./deploy/nginx/generate-selfsigned-cert.sh your-domain.com
+```
+
+기본 생성 경로:
+
+- `/etc/nginx/ssl/board-app-selfsigned.crt`
+- `/etc/nginx/ssl/board-app-selfsigned.key`
+
+### 3) Nginx 설정 반영
+
+저장소의 샘플 설정 파일:
+
+- [board-app-selfsigned.conf](/Users/elite/Downloads/board-app.worktrees/login-attempt-restriction-validation/deploy/nginx/board-app-selfsigned.conf)
+
+예시(우분투/데비안):
+
+```bash
+sudo cp deploy/nginx/board-app-selfsigned.conf /etc/nginx/sites-available/board-app.conf
+sudo ln -sf /etc/nginx/sites-available/board-app.conf /etc/nginx/sites-enabled/board-app.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 4) 검증
+
+```bash
+curl -kI https://127.0.0.1/
+```
+
+`HTTP/1.1 200`(또는 앱 라우팅에 따른 정상 응답)이면 프록시 연결이 된 것입니다.
