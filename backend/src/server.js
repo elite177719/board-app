@@ -27,6 +27,7 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const SESSION_SECRET = String(process.env.SESSION_SECRET || '').trim();
+const TRUST_PROXY = String(process.env.TRUST_PROXY || '').trim();
 
 if (!SESSION_SECRET) {
   throw new Error('SESSION_SECRET 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.');
@@ -50,7 +51,12 @@ const readLimiter = createRateLimiter({
   message: '조회 요청이 너무 많습니다. 잠시 후 다시 시도하세요.',
 });
 
-app.set('trust proxy', 1);
+if (TRUST_PROXY) {
+  const asNumber = Number(TRUST_PROXY);
+  app.set('trust proxy', Number.isInteger(asNumber) ? asNumber : TRUST_PROXY);
+} else {
+  app.set('trust proxy', false);
+}
 
 const logDirectory = path.join(__dirname, '..', '..', 'logs');
 if (!fs.existsSync(logDirectory)) {

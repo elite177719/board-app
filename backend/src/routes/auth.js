@@ -5,10 +5,27 @@ const logger = require('../logger');
 const ACTIONS = require('../constants/actions');
 const RESULTS = require('../constants/results');
 const { isLocked, recordFailure, recordSuccess } = require('../middleware/lockout');
+const { createRateLimiter } = require('../middleware/rateLimit');
 
 const router = express.Router();
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,30}$/;
+
+function normalizeUsername(username) {
+  return String(username || '').trim().toLowerCase();
+}
+
+function getSocketIp(req) {
+  const raw = req.socket?.remoteAddress || req.connection?.remoteAddress || req.ip || 'unknown';
+  return String(raw);
+}
+
+const loginLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 20,
+  keyFn: (req) => `${getSocketIp(req)}:${normalizeUsername(req.body?.username) || '-'}`,
+  message: '로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.',
+});
 
 function regenerateSession(req) {
   return new Promise((resolve, reject) => {
@@ -53,14 +70,14 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ message: '아이디와 비밀번호를 입력하세요.' });
     }
 
-    const key = String(username).trim().toLowerCase();
+    const key = normalizeUsername(username);
     const lockStatus = isLocked(key);
     if (lockStatus.locked) {
       logger.warn(`USER_ACTION action=${ACTIONS.LOGIN} attempted_username=${username} result=${RESULTS.LOCKED} ip=${req.ip}`);
